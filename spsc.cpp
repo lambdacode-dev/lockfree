@@ -23,7 +23,7 @@ inline bool empty(int r, int w) {
     return w == r;
 }
 
-inline void write_and_advance_writeidx(Item item) {
+inline void write(Item item) {
     int w = writeidx.load(std::memory_order_relaxed), r;
     do {
         r = readidx.load(std::memory_order_acquire);
@@ -34,7 +34,7 @@ inline void write_and_advance_writeidx(Item item) {
     writeidx.store((w+1) % N, std::memory_order_release);
 }
 
-inline int get_and_advance_readidx() {
+inline int read() {
     int w, r = readidx.load(std::memory_order_relaxed);
     do {
         w = writeidx.load(std::memory_order_acquire);
@@ -47,15 +47,15 @@ inline int get_and_advance_readidx() {
 }
 
 void produce() {
-    for(int i = 0; i < M; ++i) {
-        write_and_advance_writeidx(i);
+    for(int i = 1; i <= M; ++i) {
+        write(i);
     }
 }
 
 void consume() {
     int s= 0;
     for(int i = 0; i < M; ++i) {
-        s+= get_and_advance_readidx();
+        s+= read();
     }
     sum.store(s, std::memory_order_release);
 }
