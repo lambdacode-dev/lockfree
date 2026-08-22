@@ -9,7 +9,7 @@
 #include <thread>
 
 constexpr int N = 10; // buffer size: actually only hold N-1 items
-constexpr int M = 100; // total items
+constexpr int M = 10000; // total items
 using Item = int;
 std::array<Item, N> buffer; // current items at [readidx, writeidx)
 alignas(std::hardware_destructive_interference_size) std::atomic<int> readidx{}, writeidx {};
@@ -74,6 +74,8 @@ int main() {
         std::jthread p1(produce);
         std::jthread p2(produce);
         std::jthread p3(produce);
+        std::jthread p4(produce);
+        std::jthread p5(produce);
         std::jthread c(consume);
     }
     std::cout << "sum = " << sum.load(std::memory_order_acquire) << "\n";
