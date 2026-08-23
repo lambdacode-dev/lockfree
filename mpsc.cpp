@@ -10,8 +10,9 @@
 
 constexpr int N = 32; // buffer size
 constexpr int MASK = N-1; 
+static_assert( (N & MASK) == 0);
 constexpr int M = 10000; // total items for each producer
-                         //
+
 template<typename T>
 class MPSC {
     std::array<T, N> buffer; 
@@ -73,14 +74,14 @@ void consume() {
 }
 
 int main() {
-    {
-        std::jthread p1(produce);
-        std::jthread p2(produce);
-        std::jthread p3(produce);
-        std::jthread p4(produce);
-        std::jthread p5(produce);
-        std::jthread c(consume);
-    }
+  {
+    std::jthread p1(produce);
+    std::jthread p2(produce);
+    std::jthread p3(produce);
+    std::jthread p4(produce);
+    std::jthread p5(produce);
+    std::jthread c(consume);
+  }
     std::cout << "sum = " << sum.load(std::memory_order_acquire) << "\n";
     return 0;
 }
