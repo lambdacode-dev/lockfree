@@ -8,50 +8,44 @@
 #include <new>
 #include <thread>
 
-constexpr int N = 10; // buffer size: actually only hold N-1 items
-constexpr int M = 10000; // total items
+constexpr int N = 32; // buffer size
+constexpr int MASK = N-1; 
+constexpr int M = 10000; // total items for each producer
 using Item = int;
-std::array<Item, N> buffer; // current items at [readidx, writeidx)
-alignas(std::hardware_destructive_interference_size) std::atomic<int> readidx{}, writeidx {};
-alignas(std::hardware_destructive_interference_size) std::atomic<bool> writing_in_progress {};
+std::array<Item, N> buffer; 
+alignas(std::hardware_destructive_interference_size) std::atomic<unsigned int> tail {};
+alignas(std::hardware_destructive_interference_size) unsigned int head = 0;
+
+struct alignas(std::hardware_destructive_interference_size) SeqItem {
+    std::atomic<unsigned int> val;
+};
+std::array<SeqItem, N> sequence;
+
 std::atomic<int> sum {}; 
 
-inline bool full(int r, int w) {
-    return (w+1) % N == r;
-}
-
-inline bool empty(int r, int w) {
-    return w == r;
-}
-
 inline void write(Item item) {
-    for(bool done = false; !done; ) {
-        int r = readidx.load(std::memory_order_acquire);
-        int w = writeidx.load(std::memory_order_acquire);
-        if(!full(r, w)) {
-            bool writing = false;
-            if( writing_in_progress.compare_exchange_strong(writing, true, std::memory_order_acq_rel) ) {
-                if( writeidx.compare_exchange_strong(w, (w+1) % N, std::memory_order_acq_rel) ) {
-                    buffer[w] = item;
-                    done = true;
-                }
-                writing_in_progress.store(false, std::memory_order_release);
-            }
-        }
+    unsigned int p = tail.fetch_add(1, std::memory_order_relaxed);
+    unsigned int w = p & MASK;
+    while( sequence[w].val.load(std::memory_order_acquire) != p ) {
+        std::this_thread::yield();
     }
+    buffer[w] = item;
+    sequence[w].val.store(p+1, std::memory_order_release);
 }
 
 inline int read() {
-    int w, r = readidx.load(std::memory_order_relaxed);
-    do {
-        w = r;
-        if ( ! writing_in_progress.load(std::memory_order_acquire) )
-            w = writeidx.load(std::memory_order_acquire);
+    unsigned int expect = head+1;
+    unsigned int r = head & MASK;
+    int item {};
+    while(true) {
+        if( sequence[r].val.load(std::memory_order_acquire) == expect ) {
+            item = buffer[r];
+            sequence[r].val.store(head + N, std::memory_order_release);
+            head++;
+            break;
+        } 
+        std::this_thread::yield();
     }
-    while(empty(r,w));
-
-    int item = buffer[r];
-    readidx.store((r+1) % N, std::memory_order_release);
     return item;
 }
 
@@ -63,13 +57,16 @@ void produce() {
 
 void consume() {
     int s= 0;
-    for(int i = 0; i < M*3; ++i) {
+    for(int i = 0; i < M*5; ++i) {
         s+= read();
     }
     sum.store(s, std::memory_order_release);
 }
 
 int main() {
+    for(int i = 0; i < N; ++i) 
+        sequence[i].val.store(i, std::memory_order_release);
+
     {
         std::jthread p1(produce);
         std::jthread p2(produce);
