@@ -14,46 +14,47 @@ template<typename T, int N>
 class MPMC {
     static_assert( (N & (N-1)) == 0, "Ring buffer size N has to be power of 2");
 
-    // let slot index i increase monotonically, and
-    // use i & mask for actual indexing into the ring buffer
     constexpr static int mask = N - 1;
     std::array<T,N> buffer;
+
+    // let slot index i (wirteidx/readidx) increase monotonically, and
+    // use i & mask for actual indexing into the ring buffer
+    alignas(std::hardware_destructive_interference_size) std::atomic<int> writeidx {};
+    alignas(std::hardware_destructive_interference_size) std::atomic<int> readidx {};
+
 
     // assign each slot i with a seq number s.
     // i == s+1 indicates full / ready for reaad.
     // i == s indicates empty / ready for write.
     struct SeqT {
-        alignas(std::hardware_destructive_interference_size) std::atomic<int> seq {};
+        alignas(std::hardware_destructive_interference_size) std::atomic<int> val {};
     };
     std::array<SeqT, N> sequence;
-
-    alignas(std::hardware_destructive_interference_size) std::atomic<int> writeidx {};
-    alignas(std::hardware_destructive_interference_size) std::atomic<int> readidx {};
 
 public:
     MPMC() {
         for(int i = 0; i < N; ++i) {
             // initialize to empty state / ready for writing for each slot
-            sequence[i].seq.store(i, std::memory_order_release);
+            sequence[i].val.store(i, std::memory_order_release);
         }
     }
     void push(T&& item) {
         auto w = writeidx.fetch_add(1, std::memory_order_acq_rel);
         auto i = w & mask;
-        while( sequence[i].seq.load(std::memory_order_acquire) != w ) ;
+        while( sequence[i].val.load(std::memory_order_acquire) != w ) ;
         buffer[i] = std::move(item);
-        sequence[i].seq.store(w+1, std::memory_order_release);
+        sequence[i].val.store(w+1, std::memory_order_release);
     }
     T pop() {
         auto r = readidx.fetch_add(1, std::memory_order_acq_rel);
         auto i = r & mask;
-        while( sequence[i].seq.load(std::memory_order_acquire) != r+1 ) ;
+        while( sequence[i].val.load(std::memory_order_acquire) != r+1 ) ;
         T item = std::move(buffer[i]);
 
         // mark this ring buffer slot i as ready to write by
         // next write who grab montonical slot r+N
         // note (r+N) & mask = i
-        sequence[i].seq.store(r+N, std::memory_order_release);
+        sequence[i].val.store(r+N, std::memory_order_release);
         return item;
     }
 };
