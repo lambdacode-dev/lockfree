@@ -7,8 +7,8 @@
 
 /*
  * The main idea is to turn MPMC into effectively a SPSC, by generating monotonically
- * a read / write slot for an asking reader/writer, and then reader/writer has exlusive
- * access to the assigned unique slot.
+ * a read / write ticket for an asking reader/writer, and then reader/writer has exlusive
+ * access to the assigned unique slot = ticket % buffersize.
  */
 template<typename T, int N>
 class MPMC {
@@ -17,15 +17,14 @@ class MPMC {
     constexpr static int mask = N - 1;
     std::array<T,N> buffer;
 
-    // let slot index i (wirteidx/readidx) increase monotonically, and
+    // let ticket i (wirteidx/read_ticket) increase monotonically, and
     // use i & mask for actual indexing into the ring buffer
-    alignas(std::hardware_destructive_interference_size) std::atomic<int> writeidx {};
-    alignas(std::hardware_destructive_interference_size) std::atomic<int> readidx {};
+    alignas(std::hardware_destructive_interference_size) std::atomic<int> write_ticket {};
+    alignas(std::hardware_destructive_interference_size) std::atomic<int> read_ticket {};
 
-
-    // assign each slot i with a seq number s.
-    // i == s+1 indicates full / ready for reaad.
-    // i == s indicates empty / ready for write.
+    // Assign each slot i, holded by ticket t, with a seq number.
+    // t == sequence[i] indicates empty / ready for write.
+    // t == sequence[i]+1 indicates full / ready for read.
     struct SeqT {
         alignas(std::hardware_destructive_interference_size) std::atomic<int> val {};
     };
@@ -39,21 +38,21 @@ public:
         }
     }
     void push(T&& item) {
-        auto w = writeidx.fetch_add(1, std::memory_order_acq_rel);
+        auto w = write_ticket.fetch_add(1, std::memory_order_acq_rel);
         auto i = w & mask;
         while( sequence[i].val.load(std::memory_order_acquire) != w ) ;
         buffer[i] = std::move(item);
         sequence[i].val.store(w+1, std::memory_order_release);
     }
     T pop() {
-        auto r = readidx.fetch_add(1, std::memory_order_acq_rel);
+        auto r = read_ticket.fetch_add(1, std::memory_order_acq_rel);
         auto i = r & mask;
         while( sequence[i].val.load(std::memory_order_acquire) != r+1 ) ;
         T item = std::move(buffer[i]);
 
-        // mark this ring buffer slot i as ready to write by
-        // next write who grab montonical slot r+N
-        // note (r+N) & mask = i
+        // Mark this ring buffer slot i as ready to write for
+        // next write whoever grab ticket r+N.
+        // Note (r+N) & mask = slot i
         sequence[i].val.store(r+N, std::memory_order_release);
         return item;
     }
@@ -61,7 +60,7 @@ public:
 
 
 int main() {
-    MPMC<int, 8> que;
+    MPMC<int, 64> que;
     constexpr int M = 128;
     alignas(std::hardware_destructive_interference_size) std::atomic<int> sum {};
     {
